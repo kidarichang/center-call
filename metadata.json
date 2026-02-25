@@ -1,0 +1,5 @@
+{
+  "name": "센터방문 개통 요청서 작성기",
+  "description": "센터 방문 개통 요청서를 간편하게 작성하고 복사 및 저장할 수 있는 도구입니다.",
+  "requestFramePermissions": ["web-share"]
+}

@@ -1,11 +1,14 @@
 #!/usr/bin/env python3
-"""선불폰 개통 안내 이미지(WebP)에 EXIF + XMP 메타데이터를 삽입한다.
+"""선불폰 개통 안내 이미지(WebP, PNG)에 EXIF + XMP 메타데이터를 삽입한다.
 
-이미지 데이터는 재인코딩하지 않고 RIFF 청크(EXIF, XMP)만 추가하므로 화질 손실이 없다.
+이미지 데이터는 재인코딩하지 않고 메타데이터 청크만 추가하므로 화질 손실이 없다.
+- WebP: RIFF 청크 EXIF, XMP
+- PNG : eXIf, iTXt(XML:com.adobe.xmp), iTXt(Title/Description/Author/Copyright/Software)
 사용법: python3 scripts/add_image_metadata.py <원본폴더> <출력폴더>
 """
 import struct
 import sys
+import zlib
 from pathlib import Path
 from xml.sax.saxutils import escape
 
@@ -74,6 +77,34 @@ IMAGES = [
         "alt": "투폰통신 온라인 명함: 상담전화 010 5110 0444, 카톡채널 투폰통신, 태블릿번호 2939314, 홈페이지 투폰통신.com",
         "keywords": ["투폰통신 연락처", "선불폰 개통 상담", "선불폰 상담전화", "투폰통신 카톡채널",
                      "010-5110-0444", "온라인 명함"],
+    },
+    {
+        "src": "6.png",
+        "out": "06-kt-prepaid-plans.png",
+        "title": "KT 선불요금제표 (앤텔레콤 K망) | 투폰통신",
+        "headline": "KT 선불요금제표",
+        "description": "앤텔레콤 K망 KT 선불폰 요금제표. 300MB 라이트 33,000원(300MB, 소진 후 1Mbps), "
+                       "LTE 396 39,600원(10.3GB, 3Mbps), LTE 459 45,900원(20.3GB, 3Mbps), "
+                       "770 77,000원(월 10GB + 일 2GB, 3Mbps), 선불 859 85,900원(100GB, 5Mbps).",
+        "alt": "앤텔레콤 K망 KT 선불요금제표: 요금제명, 월 요금, 데이터 제공량, 소진 후 속도 비교표",
+        "keywords": ["KT 선불요금제", "KT 선불폰 요금제", "K망 선불폰", "KT망 선불폰", "앤텔레콤",
+                     "앤텔레콤 K망", "선불폰 요금제", "선불 요금제표", "300MB 라이트", "LTE 396",
+                     "LTE 459", "선불 770", "선불 859", "선불폰 무제한"],
+    },
+    {
+        "src": "7.png",
+        "out": "07-lg-prepaid-plans.png",
+        "title": "LG 선불요금제표 (앤텔레콤 L망) | 투폰통신",
+        "headline": "LG 선불요금제표",
+        "description": "앤텔레콤 L망 LG U+ 선불폰 요금제표. 기본1 12,100원(300MB), "
+                       "300MB 라이트 33,000원(300MB, 소진 후 1Mbps), LTE 396 39,600원(10.3GB, 3Mbps), "
+                       "5G 464 46,400원(20GB, 3Mbps), 770 77,000원(월 11GB + 일 2GB, 3Mbps), "
+                       "매일5GB(859) 85,900원(매일 5GB, 5Mbps).",
+        "alt": "앤텔레콤 L망 LG 선불요금제표: 요금제명, 월 요금, 데이터 제공량, 소진 후 속도 비교표",
+        "keywords": ["LG 선불요금제", "LG 선불폰 요금제", "L망 선불폰", "LG망 선불폰", "LG U+ 선불폰",
+                     "앤텔레콤", "앤텔레콤 L망", "선불폰 요금제", "선불 요금제표", "기본1",
+                     "300MB 라이트", "LTE 396", "5G 464", "선불 770", "매일5GB", "선불 859",
+                     "선불폰 무제한"],
     },
 ]
 
@@ -162,6 +193,37 @@ def embed(src: Path, dst: Path, exif: bytes, xmp: bytes) -> None:
     dst.write_bytes(b"RIFF" + struct.pack("<I", len(body)) + body)
 
 
+def png_chunk(tag: bytes, data: bytes) -> bytes:
+    return struct.pack(">I", len(data)) + tag + data + struct.pack(">I", zlib.crc32(tag + data))
+
+
+def itxt(key: str, text: str) -> bytes:
+    # keyword, null, 압축플래그 0, 압축방식 0, 언어태그, null, 번역키워드, null, UTF-8 텍스트
+    lang = b"" if key.startswith("XML:") else b"ko"
+    return png_chunk(b"iTXt", key.encode("latin-1") + b"\0\0\0" + lang + b"\0\0" + text.encode("utf-8"))
+
+
+def embed_png(src: Path, dst: Path, m: dict, exif: bytes, xmp: bytes) -> None:
+    d = src.read_bytes()
+    sig = b"\x89PNG\r\n\x1a\n"
+    assert d[:8] == sig, f"{src}: PNG 아님"
+    drop = {b"eXIf", b"iTXt", b"tEXt", b"zTXt"}  # 기존 메타 교체
+    chunks, i = [], 8
+    while i < len(d):
+        n = struct.unpack(">I", d[i:i + 4])[0]
+        tag = d[i + 4:i + 8]
+        if tag not in drop:
+            chunks.append(d[i:i + 12 + n])
+        i += 12 + n
+    meta = png_chunk(b"eXIf", exif[6:] if exif.startswith(b"Exif\0\0") else exif)
+    meta += itxt("XML:com.adobe.xmp", xmp.decode("utf-8"))
+    for key, val in (("Title", m["title"]), ("Description", m["description"]),
+                     ("Author", BRAND), ("Copyright", COPYRIGHT), ("Software", BRAND),
+                     ("Source", SITE)):
+        meta += itxt(key, val)
+    dst.write_bytes(sig + chunks[0] + meta + b"".join(chunks[1:]))  # IHDR 바로 뒤
+
+
 def main() -> None:
     if len(sys.argv) != 3:
         raise SystemExit(__doc__)
@@ -170,7 +232,11 @@ def main() -> None:
     for m in IMAGES:
         keywords = list(dict.fromkeys(COMMON_KEYWORDS + m["keywords"]))
         dst = out_dir / m["out"]
-        embed(src_dir / m["src"], dst, build_exif(m, keywords), build_xmp(m, keywords))
+        exif, xmp = build_exif(m, keywords), build_xmp(m, keywords)
+        if dst.suffix.lower() == ".png":
+            embed_png(src_dir / m["src"], dst, m, exif, xmp)
+        else:
+            embed(src_dir / m["src"], dst, exif, xmp)
         print(f"{m['src']} -> {dst}")
 
 
